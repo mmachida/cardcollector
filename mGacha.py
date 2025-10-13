@@ -1,7 +1,6 @@
 import streamlit as st
 from pymongo import MongoClient
-from datetime import datetime, timedelta
-import pytz
+from datetime import timedelta
 
 # --- Conexão MongoDB ---
 MONGO_URI = st.secrets["MONGO"]["uri"]
@@ -17,10 +16,11 @@ st.set_page_config(page_title="mGacha", layout="centered")
 st.title("🎴 mGacha Dashboard")
 
 # --- Top 3 usuários ---
-st.subheader("🏆 Top 3 usuários com mais cartas")
+st.subheader("🏆 Top 3 usuários com mais cartas únicas")
+total_unique_cards = cards_col.count_documents({})
 top_users = users_col.find().sort("total_unique_cards", -1).limit(3)
 for user in top_users:
-    st.write(f"{user['twitch_name']} - {user['total_unique_cards']} cartas")
+    st.write(f"{user['twitch_name']} - {user['total_unique_cards']}/{total_unique_cards}")
 
 st.markdown("---")
 
@@ -32,6 +32,25 @@ selected_user_name = st.selectbox("Selecione o usuário", user_options)
 selected_user_doc = users_col.find_one({"twitch_name": selected_user_name})
 selected_user_id = selected_user_doc["_id"] if selected_user_doc else None
 
+# --- Filtros de ordenação ---
+st.subheader("⚙️ Ordenar cartas")
+
+if "reverse" not in st.session_state:
+    st.session_state.reverse = False
+
+# Colunas para filtro + botão de reverso
+col_sort, col_reverse = st.columns([5,1])
+
+with col_sort:
+    sort_type = st.selectbox("Tipo de ordenação:", ["Número", "Alfabético", "Raridade", "Quantidade"])
+
+with col_reverse:
+    # Adiciona espaço acima do botão para alinhar com o campo de seleção
+    st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+    rev_clicked = st.button("⇅")
+    if rev_clicked:
+        st.session_state.reverse = not st.session_state.reverse
+
 # --- Cartas ---
 st.subheader(f"📦 Cartas de {selected_user_name}")
 if selected_user_id:
@@ -41,18 +60,48 @@ if selected_user_id:
         card_doc = cards_col.find_one({"_id": item["card_id"]})
         if card_doc:
             cards_list.append({
+                "number": card_doc.get("card_number", 0),
                 "name": card_doc["name"],
                 "rarity": card_doc["rarity"],
                 "image_url": card_doc["image_url"],
                 "quantity": item.get("quantity", 1)
             })
+
     if cards_list:
-        cols = st.columns(4)
-        for idx, card in enumerate(cards_list):
-            col = cols[idx % 4]
-            # Ajuste de largura com width, substituindo use_container_width
-            col.image(card["image_url"], width=285)  # ajuste o valor conforme necessário
-            col.caption(f"{card['name']} - {card['rarity']} x{card['quantity']}")
+        # --- Aplicar ordenação ---
+        if sort_type == "Número":
+            cards_list.sort(key=lambda x: x["number"], reverse=st.session_state.reverse)
+        elif sort_type == "Alfabético":
+            cards_list.sort(key=lambda x: x["name"].lower(), reverse=st.session_state.reverse)
+        elif sort_type == "Raridade":
+            rarity_order = ["legendary", "epic", "rare", "common"]
+            cards_list.sort(key=lambda x: rarity_order.index(x["rarity"].lower()), reverse=st.session_state.reverse)
+        elif sort_type == "Quantidade":
+            cards_list.sort(key=lambda x: x["quantity"], reverse=st.session_state.reverse)
+
+        # --- Renderizar em linhas de 4 colunas ---
+        num_cols = 4
+        for i in range(0, len(cards_list), num_cols):
+            row_cards = cards_list[i:i+num_cols]
+            cols = st.columns(num_cols)
+            for idx, card in enumerate(row_cards):
+                col = cols[idx]
+                col.markdown(f"""
+                    <div style="
+                        display:flex;
+                        flex-direction: column;
+                        align-items:center;
+                        justify-content:flex-start;
+                        min-height:250px;
+                        text-align:center;
+                        margin-bottom:10px;
+                    ">
+                        <a href="{card['image_url']}" target="_blank">
+                            <img src="{card['image_url']}" width="285" loading="lazy" style="flex-shrink:0;">
+                        </a>
+                        <div style="margin-top:5px;">{card['name']} - {card['rarity']} x{card['quantity']}</div>
+                    </div>
+                """, unsafe_allow_html=True)
     else:
         st.write("Nenhuma carta encontrada")
 else:
@@ -62,7 +111,6 @@ st.markdown("---")
 
 # --- Histórico ---
 st.subheader(f"📜 Histórico de ações de {selected_user_name}")
-
 if selected_user_id:
     selected_user_twitch_id = selected_user_doc["twitch_id"]
     logs_cursor = log_col.find({"twitch_id": selected_user_twitch_id}).sort("timestamp", -1)
@@ -70,20 +118,17 @@ if selected_user_id:
     logs_list = []
     for log in logs_cursor:
         ts = log["timestamp"]
-        # Subtrai 3 horas
         ts_brasil = ts - timedelta(hours=3)
-        
         details = log.get("details", {})
         name = details.get("name", "")
         rarity = details.get("rarity", "")
         logs_list.append(f"{ts_brasil.strftime('%Y-%m-%d %H:%M:%S')} - {log['action']} - {name} - {rarity}")
 
     if logs_list:
-        # Caixa com scroll, mostrando apenas 5 linhas de altura
         st.text_area(
             label="Histórico",
             value="\n".join(logs_list),
-            height=5*35,  # aproximadamente 25px por linha
+            height=5*35,
             disabled=True
         )
     else:
