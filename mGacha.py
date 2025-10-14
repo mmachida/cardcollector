@@ -30,99 +30,84 @@ all_users = list(users_col.find())
 user_options = [u["twitch_name"] for u in all_users]
 selected_user_name = st.selectbox("Selecione o usuário", user_options)
 
+# --- Garantir que selected_user_doc está definido ---
+selected_user_doc = users_col.find_one({"twitch_name": selected_user_name})
+selected_user_id = selected_user_doc["_id"]
+
 # Inicializa session_state para armazenar dados do usuário
 if "current_user" not in st.session_state or st.session_state.current_user != selected_user_name:
     st.session_state.current_user = selected_user_name
     st.session_state.cards_list = []
     st.session_state.logs_list = []
 
-    # --- Buscar dados do usuário ---
-    selected_user_doc = users_col.find_one({"twitch_name": selected_user_name})
-    if selected_user_doc:
-        selected_user_id = selected_user_doc["_id"]
-        user_inventory = inventory_col.find({"user_id": selected_user_id})
-        for item in user_inventory:
-            card_doc = cards_col.find_one({"_id": item["card_id"]})
-            if card_doc:
-                st.session_state.cards_list.append({
-                    "number": card_doc.get("card_number", 0),
-                    "name": card_doc["name"],
-                    "rarity": card_doc["rarity"],
-                    "image_url": card_doc["image_url"],
-                    "quantity": item.get("quantity", 1)
-                })
+    # --- Buscar cartas do usuário ---
+    user_inventory = inventory_col.find({"user_id": selected_user_id})
+    for item in user_inventory:
+        card_doc = cards_col.find_one({"_id": item["card_id"]})
+        if card_doc:
+            st.session_state.cards_list.append({
+                "number": card_doc.get("card_number", 0),
+                "name": card_doc["name"],
+                "rarity": card_doc["rarity"],
+                "image_url": card_doc["image_url"],
+                "quantity": item.get("quantity", 1),
+                "card_id": card_doc["_id"]
+            })
 
-        logs_cursor = log_col.find({"twitch_id": selected_user_doc["twitch_id"]}).sort("timestamp", -1)
-        for log in logs_cursor:
-            ts = log["timestamp"]
-            ts_brasil = ts - timedelta(hours=3)
-            details = log.get("details", {})
-            name = details.get("name", "")
-            rarity = details.get("rarity", "")
-            st.session_state.logs_list.append(
-                f"{ts_brasil.strftime('%Y-%m-%d %H:%M:%S')} - {log['action']} - {name} - {rarity}"
-            )
+    # --- Buscar histórico ---
+    logs_cursor = log_col.find({"twitch_id": selected_user_doc["twitch_id"]}).sort("timestamp", -1)
+    for log in logs_cursor:
+        ts = log["timestamp"]
+        ts_brasil = ts - timedelta(hours=3)
+        details = log.get("details", {})
+        name = details.get("name", "")
+        rarity = details.get("rarity", "")
+        st.session_state.logs_list.append(
+            f"{ts_brasil.strftime('%Y-%m-%d %H:%M:%S')} - {log['action']} - {name} - {rarity}"
+        )
 
-# --- Filtros de ordenação ---
-st.subheader("⚙️ Ordenar cartas")
-if "reverse" not in st.session_state:
-    st.session_state.reverse = False
-if "prev_sort_type" not in st.session_state:
-    st.session_state.prev_sort_type = None
+# --- Novo filtro: todas / só do usuário / só não do usuário ---
+st.subheader("⚙️ Filtrar cartas")
+filter_option = st.selectbox("Mostrar cartas:", ["Todas", "Só as do usuário", "Só as que ele não tem"])
 
-col_sort, col_reverse = st.columns([5,1])
+# --- Preparar lista de cartas para exibir ---
+all_cards = list(cards_col.find())
+user_card_ids = set(item["card_id"] for item in inventory_col.find({"user_id": selected_user_id}))
 
-with col_sort:
-    sort_type = st.selectbox("Tipo de ordenação:", ["Número", "Alfabético", "Raridade", "Quantidade"])
+display_cards = []
+for card in all_cards:
+    has_card = card["_id"] in user_card_ids
+    if filter_option == "Todas":
+        display_cards.append((card, has_card))
+    elif filter_option == "Só as do usuário" and has_card:
+        display_cards.append((card, True))
+    elif filter_option == "Só as que ele não tem" and not has_card:
+        display_cards.append((card, False))
 
-    # Resetar reverse se o tipo de ordenação mudou
-    if st.session_state.prev_sort_type != sort_type:
-        st.session_state.reverse = True if sort_type == "Quantidade" else False
-        st.session_state.prev_sort_type = sort_type
-
-with col_reverse:
-    st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
-    rev_clicked = st.button("⇅")
-    if rev_clicked:
-        st.session_state.reverse = not st.session_state.reverse
-
-# --- Ordenar e mostrar cartas ---
+# --- Mostrar cartas ---
 st.subheader(f"📦 Cartas de {selected_user_name}")
-cards_list = st.session_state.cards_list.copy()  # copia para não alterar permanentemente
-
-if cards_list:
-    if sort_type == "Número":
-        cards_list.sort(key=lambda x: x["number"], reverse=st.session_state.reverse)
-    elif sort_type == "Alfabético":
-        cards_list.sort(key=lambda x: x["name"].lower(), reverse=st.session_state.reverse)
-    elif sort_type == "Raridade":
-        rarity_order = ["legendary", "epic", "rare", "common"]
-        cards_list.sort(key=lambda x: rarity_order.index(x["rarity"].lower()), reverse=st.session_state.reverse)
-    elif sort_type == "Quantidade":
-        cards_list.sort(key=lambda x: x["quantity"], reverse=st.session_state.reverse)
-
-    num_cols = 4
-    for i in range(0, len(cards_list), num_cols):
-        row_cards = cards_list[i:i+num_cols]
-        cols = st.columns(num_cols)
-        for idx, card in enumerate(row_cards):
-            col = cols[idx]
-            col.markdown(f"""
-                <div style="
-                    display:flex;
-                    flex-direction: column;
-                    align-items:center;
-                    justify-content:flex-start;
-                    min-height:250px;
-                    text-align:center;
-                    margin-bottom:10px;
-                ">
-                    <img src="{card['image_url']}" width="285" loading="lazy" style="flex-shrink:0;">
-                    <div style="margin-top:5px;">{card['name']} - {card['rarity']} x{card['quantity']}</div>
-                </div>
-            """, unsafe_allow_html=True)
-else:
-    st.write("Nenhuma carta encontrada")
+num_cols = 5
+for i in range(0, len(display_cards), num_cols):
+    row_cards = display_cards[i:i+num_cols]
+    cols = st.columns(num_cols)
+    for idx, (card, has_card) in enumerate(row_cards):
+        col = cols[idx]
+        img_style = "" if has_card else "filter: grayscale(100%);"
+        quantity_text = f" x{next((c['quantity'] for c in st.session_state.cards_list if c['card_id']==card['_id']), 0)}" if has_card else ""
+        col.markdown(f"""
+            <div style="
+                display:flex;
+                flex-direction: column;
+                align-items:center;
+                justify-content:flex-start;
+                min-height:250px;
+                text-align:center;
+                margin-bottom:10px;
+            ">
+                <img src="{card['image_url']}" width="285" loading="lazy" style="flex-shrink:0; {img_style}">
+                <div style="margin-top:5px;">{card['name']} - {card['rarity']}{quantity_text}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
 st.markdown("---")
 
