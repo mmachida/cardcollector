@@ -34,6 +34,10 @@ selected_user_name = st.selectbox("Selecione o usuário", user_options)
 selected_user_doc = users_col.find_one({"twitch_name": selected_user_name})
 selected_user_id = selected_user_doc["_id"]
 
+# 🪙 --- Mostrar tokens do usuário ---
+tokens = selected_user_doc.get("tokens", 0)
+st.markdown(f"**🪙 Tokens:** {tokens}")
+
 # Inicializa session_state para armazenar dados do usuário
 if "current_user" not in st.session_state or st.session_state.current_user != selected_user_name:
     st.session_state.current_user = selected_user_name
@@ -60,15 +64,32 @@ if "current_user" not in st.session_state or st.session_state.current_user != se
         ts = log["timestamp"]
         ts_brasil = ts - timedelta(hours=3)
         details = log.get("details", {})
-        name = details.get("name", "")
+
+        # Extrai informações detalhadas do log
+        card_name = details.get("card_name", "")
         rarity = details.get("rarity", "")
-        st.session_state.logs_list.append(
-            f"{ts_brasil.strftime('%Y-%m-%d %H:%M:%S')} - {log['action']} - {name} - {rarity}"
+        nova_carta = details.get("nova_carta", None)
+        tokens_ganhos = details.get("tokens_ganhos", 0)
+
+        # Define o texto "Nova" ou "Repetida"
+        if nova_carta is True:
+            status_text = "🆕 Nova"
+        elif nova_carta is False:
+            status_text = "♻️ Repetida"
+        else:
+            status_text = ""
+
+        # Monta o texto final do log
+        log_line = (
+            f"{ts_brasil.strftime('%Y-%m-%d %H:%M:%S')} - {log['action']} - "
+            f"{card_name} ({rarity}) {status_text} - 💰 +{tokens_ganhos} tokens"
         )
+
+        st.session_state.logs_list.append(log_line)
 
 # --- Novo filtro: todas / só do usuário / só não do usuário ---
 st.subheader("⚙️ Filtrar cartas")
-filter_option = st.selectbox("Mostrar cartas:", ["Todas", "Só as do usuário", "Só as que ele não tem"])
+filter_option = st.selectbox("Mostrar cartas:", ["Todas", "Adquiridas", "Não adquiridas"])
 
 # --- Preparar lista de cartas para exibir ---
 all_cards = list(cards_col.find())
@@ -88,12 +109,15 @@ for card in all_cards:
 st.subheader(f"📦 Cartas de {selected_user_name}")
 num_cols = 5
 for i in range(0, len(display_cards), num_cols):
-    row_cards = display_cards[i:i+num_cols]
+    row_cards = display_cards[i:i + num_cols]
     cols = st.columns(num_cols)
     for idx, (card, has_card) in enumerate(row_cards):
         col = cols[idx]
         img_style = "" if has_card else "filter: grayscale(100%);"
-        quantity_text = f" x{next((c['quantity'] for c in st.session_state.cards_list if c['card_id']==card['_id']), 0)}" if has_card else ""
+        quantity_text = (
+            f" x{next((c['quantity'] for c in st.session_state.cards_list if c['card_id'] == card['_id']), 0)}"
+            if has_card else ""
+        )
         col.markdown(f"""
             <div style="
                 display:flex;
@@ -117,7 +141,7 @@ if st.session_state.logs_list:
     st.text_area(
         label="Histórico",
         value="\n".join(st.session_state.logs_list),
-        height=5*35,
+        height=5 * 35,
         disabled=True
     )
 else:
